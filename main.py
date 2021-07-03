@@ -32,8 +32,7 @@ df = pd.read_csv("./data/qqq.us.txt", dtype=dtypes, index_col=0, parse_dates=Tru
 
 df = df.drop(["Open", "High", "Low", "Volume", "OpenInt"], axis=1)
 
-df["Close"].plot()
-
+# df["Close"].plot()
 # %% Prepare Prediction column
 def willBreakOut(x):
     if (x.iloc[1:] > x[0] * 1.1).any():
@@ -45,9 +44,10 @@ def willBreakOut(x):
 
 
 df["Prediction"] = df["Close"].rolling(window=10).apply(willBreakOut)
-df["Prediction"].plot()
+df.fillna(0, inplace=True)
+df.plot()
 
-#%% Get /Compute the number of rows to train the model on
+#%% Get Compute the number of rows to train the model on
 training_data_len = int(len(df) * 0.8)
 
 # Scale the all of the data to be values between 0 and 1
@@ -58,6 +58,8 @@ scaled_data = scaler.fit_transform(df)
 train_data = scaled_data[0:training_data_len, :]
 
 batch_size = 60
+pd.DataFrame(scaled_data).plot()
+
 # %% Define helpful functions
 
 
@@ -66,7 +68,7 @@ def create_batch_dataset(dataframe, batch_size=60):
     ROLLING_WINDOW = 12
 
     for i in range(batch_size, len(dataframe) - ROLLING_WINDOW):
-        x_train.append(dataframe[i - batch_size : i, :-1])
+        x_train.append(dataframe[i - batch_size : i, :])
         y_train.append(dataframe[i, -1:])
 
     return np.array(x_train), np.array(y_train)
@@ -83,7 +85,13 @@ def invTransform(scaler, data, colName, colNames):
 x_train, y_train = create_batch_dataset(train_data, batch_size)
 
 model = Sequential()
-model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 1)))
+model.add(
+    LSTM(
+        units=50,
+        return_sequences=True,
+        input_shape=(x_train.shape[1], x_train.shape[2]),
+    )
+)
 model.add(LSTM(units=50, return_sequences=False))
 model.add(Dense(units=25))
 model.add(Dense(units=1))
@@ -97,8 +105,8 @@ stoppingCallback = tf.keras.callbacks.EarlyStopping(monitor="loss", patience=10)
 history = model.fit(
     x_train,
     y_train,
-    batch_size=batch_size,
-    epochs=30,
+    batch_size,
+    epochs=60,
     callbacks=[stoppingCallback],
     shuffle=False,
 )
@@ -114,6 +122,7 @@ x_test, y_test = create_batch_dataset(test_data, batch_size)
 x_train_predict = model.predict(x_train, batch_size=batch_size)
 model.reset_states()
 x_test_predict = model.predict(x_test, batch_size=batch_size)
+
 x_train_predict = invTransform(
     scaler, x_train_predict, "Prediction", ["Close", "Prediction"]
 )
@@ -133,28 +142,22 @@ print("Test Score: %.2f RMSE" % (testScore))
 
 # %% Plot results
 # shift train predictions for plotting
-trainPredictPlot = df.iloc[:training_data_len, :1]
-trainPredictPlot.at[:, 0:1] = np.nan
-trainPredictPlot.at[batch_size : len(x_train_predict) + batch_size, :] = np.reshape(
+result_df = df.copy()
+result_df.iloc[:, 0] = scaled_data[:, 0]
+
+result_df["training_prediction"] = np.nan
+result_df.iloc[batch_size : len(x_train_predict) + batch_size, -1:] = np.reshape(
     x_train_predict, (len(x_train_predict), 1)
 )
 
-
-# shift test predictions for plotting
-testPredictPlot = df.iloc[training_data_len:, :1]
-testPredictPlot.at[:, 0:1] = np.nan
-testPredictPlot.at[-len(x_test_predict) :, :] = np.reshape(
+result_df["test_prediction"] = np.nan
+result_df.iloc[-len(x_test_predict) :, -1:] = np.reshape(
     x_test_predict, (len(x_test_predict), 1)
 )
 
+result_df.loc["1970-01-01":"2022-03-01"][
+    ["Prediction", "training_prediction", "test_prediction"]
+].plot()
 
-# %% plot baseline and predictions
-# plt.plot(scaler.inverse_transform(dataset))
-plt.close()
-plt.plot(df.iloc[:, 1:])
-# trainPredictPlot.describe()
-plt.plot(trainPredictPlot)
-plt.plot(testPredictPlot)
-plt.show()
+# plt.plot(result_df[["Prediction", "training_prediction", "test_prediction"]])
 
-# trainPredictPlot.head(100)
